@@ -1,14 +1,17 @@
 SHELL=	/bin/ksh
 FC      =$(FCMP)
 LIBS    =$(LIBSM)
-OBJS	=apply_incr_noahmp_snow.o
+OBJS	=apply_incr_noahmp_snow.o NoahMPdisag_module.o
 
 CMD     =apply_incr
 $(CMD):	$(OBJS)
-	${FC} ${DEBUG} $(FFLAGS) $(LDFLG) $(OBJS) $(LIBS) -o $(CMD)
+	${FC} $(FFLAGS) $(OBJS) $(LIBS) -o $(CMD)
 
-apply_incr_noahmp_snow.o: apply_incr_noahmp_snow.f90
-	$(FC)  $(FFLAGS) $(OMPFLAG) -c apply_incr_noahmp_snow.f90
+NoahMPdisag_module.o: NoahMPdisag_module.f90
+	$(FC) $(FFLAGS) -c NoahMPdisag_module.f90
+
+apply_incr_noahmp_snow.o: NoahMPdisag_module.o apply_incr_noahmp_snow.f90
+	$(FC) $(FFLAGS) -c apply_incr_noahmp_snow.f90
 
 install:
 	-cp -p $(CMD) ../exec/.

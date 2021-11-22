@@ -4,13 +4,12 @@ set -x
 #-use standard module.
 #-----------------------------------------------------
 
-##export DEBUG='-ftrapuv -check all -check nooutput_conversion -fp-stack-check -fstack-protector -traceback -g'
-export INCS="-I$IP_INCd ${NETCDF_INCLUDE}"
+#export INCS=${NETCDF_INCLUDE}             # netcdf_parallel module sets this
+export INCS="-I${NETCDF}/include"          # netcdf modules does not 
 export FFLAGS="$INCS -O3 -fp-model precise -r8 -convert big_endian -traceback -g"
-export OMPFLAG=-qopenmp
-export LDFLG=-qopenmp
 
-export LIBSM="${NETCDF_LDFLAGS_F}"
+#export LIBSM="${NETCDF_LDFLAGS_F}"        # as above
+export LIBSM="-L${NETCDF}/lib -lnetcdff"
 
 make -f Makefile clean
 make -f Makefile
