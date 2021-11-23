@@ -50,7 +50,8 @@ contains
 
     anal_snow_depth = snow_depth(iloc) + increment(iloc) ! analysed bulk snow depth
     
-    if(anal_snow_depth <=  0.0) then ! correct negative snow depth here
+    if(anal_snow_depth <=  0.0001) then ! correct negative snow depth here
+                                      ! also ignore small increments
 
       swe                (iloc)   = 0.0
       snow_depth         (iloc)   = 0.0
@@ -150,7 +151,7 @@ contains
       elseif(active_layers == 0) then  ! snow starts in zero-layer mode
 
         if(increment(iloc) > 0.0) then  ! add snow in zero-layer mode
-    
+
           if(snow_depth(iloc) == 0) then   ! no snow present, so assume density based on soil temperature
             pathway = 3
             layer_density = max(80.0,min(120.,67.92+51.25*exp((temperature_soil(iloc)-273.15)/2.59)))
@@ -217,14 +218,14 @@ contains
     end if
 
     if( (abs(anal_snow_depth - snow_depth(iloc))   > 0.0000001) .and. (anal_snow_depth > 0.) ) then
-      print*, "observed snow and updated model snow inconsistent"
+      print*, "snow increment and updated model snow inconsistent"
       print*, pathway
       print*, anal_snow_depth, snow_depth(iloc)
 !      stop
     end if
 
     if(snow_depth(iloc) < 0.0 .or. snow_soil_interface(iloc,3) > 0.0 ) then
-      print*, "observed snow and updated model snow inconsistent"
+      print*, "snow increment and updated model snow inconsistent"
       print*, pathway
       print*, snow_depth(iloc), snow_soil_interface(iloc,3)
 !      stop

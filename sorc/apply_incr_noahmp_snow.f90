@@ -2,7 +2,7 @@
 
  use netcdf
 
- use NoahMPdisag_module, only : noahmp_type 
+ use NoahMPdisag_module, only : noahmp_type, UpdateAllLayers
 
  implicit none
 
@@ -71,6 +71,8 @@
                 len_land_vec, tile2vector, increment)
 
     ! ADJUST THE RESTART
+
+    call UpdateAllLayers(len_land_vec, increment, noahmp_state)
 
     ! WRITE OUT ADJUSTED RESTART
 
