@@ -8,7 +8,6 @@
 
  include 'mpif.h'
 
-! defined types
 
  type(noahmp_type)      :: noahmp_state
 
@@ -16,10 +15,9 @@
  character(len=8) :: date_str 
  character(len=2) :: hour_str
 
- ! restart arrays 
- type(noahmp_type) :: sfc_rst
  ! index to map between tile and vector space 
- integer, allocatable :: tile2vector(:,:)
+ integer, allocatable :: tile2vector(:,:) 
+ double precision, allocatable :: increment(:) 
 
  integer :: ierr, nprocs, myrank, lunit, ncid
  logical :: file_exists
@@ -49,7 +47,7 @@
 
     call get_fv3_mapping(myrank, date_str, hour_str, res, len_land_vec, tile2vector)
   
-    ! SET-UP THE NOAH-MP STATE 
+    ! SET-UP THE NOAH-MP STATE  AND INCREMENT
 
     allocate(noahmp_state%swe                (len_land_vec))
     allocate(noahmp_state%snow_depth         (len_land_vec))
@@ -60,12 +58,24 @@
     allocate(noahmp_state%snow_ice_layer     (len_land_vec,3))
     allocate(noahmp_state%snow_liq_layer     (len_land_vec,3))
     allocate(noahmp_state%temperature_soil   (len_land_vec))
+    allocate(increment   (len_land_vec))
 
     ! READ RESTART FILE 
+
     call   read_fv3_restart(myrank, date_str, hour_str, res, ncid, & 
                 len_land_vec, tile2vector, noahmp_state )
 
-    call   write_fv3_restart(ncid, noahmp_state, res)
+    ! READ SNOW DEPTH INCREMENT
+
+    call   read_fv3_increment(myrank, date_str, hour_str, res, & 
+                len_land_vec, tile2vector, increment)
+
+    ! ADJUST THE RESTART
+
+    ! WRITE OUT ADJUSTED RESTART
+
+    call   write_fv3_restart(noahmp_state, res, ncid, len_land_vec, & 
+                tile2vector) 
 
 
     ! CLOSE RESTART FILE 
@@ -208,9 +218,7 @@ end subroutine get_fv3_mapping
  character(len=100) :: restart_file
  character(len=1) :: rankch
  logical :: file_exists
- integer :: ierr 
- integer :: id_dim, id_var, fres
- double precision :: dummy2D(res, res) 
+ integer :: ierr, id_dim, fres
  integer :: nn
 
     ! OPEN FILE
@@ -241,57 +249,301 @@ end subroutine get_fv3_mapping
        call mpi_abort(mpi_comm_world, ierr)
     endif
 
-    ! read swe (file name: sheleg) 
-    ierr=nf90_inq_varid(ncid, "sheleg", id_var)
-    call netcdf_err(ierr, 'reading sheleg id' )
-    ierr=nf90_get_var(ncid, id_var, dummy2D)
-    call netcdf_err(ierr, 'reading sheleg' )
+   ! read swe (file name: sheleg, vert dim 1) 
+    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'sheleg    ', noahmp_state%swe)
 
-    do nn=1,len_land_vec 
-        noahmp_state%swe(nn) = dummy2D(tile2vector(nn,1), tile2vector(nn,2))
-    enddo
- 
-    ! read swe (file name: sheleg, vert dim 1) 
     ! read snow_depth (file name: snwdph, vert dim 1)
-    ! read active_snow_layers (file name: snowxy, vert dim: 1) 
-    ! read swe_previous (file name: sneqvoxy, vert dim: 1) 
-    ! read snow_soil_interface (file name: zsnsoxy, vert dim: 7) 
-    ! read temperature_snow (file name: tsnoxy, vert dim: 3) 
-    ! read snow_ice_layer (file name:  snicexy, vert dim: 3) 
-    ! read snow_liq_layer (file name: snliqxy, vert dim: 3) 
-    ! read temperature_soil (file name: stc, use layer 1 only, vert dim: 1) 
+    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'snwdph    ', noahmp_state%snow_depth)
 
+    ! read active_snow_layers (file name: snowxy, vert dim: 1) 
+    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'snowxy    ', noahmp_state%active_snow_layers)
+
+    ! read swe_previous (file name: sneqvoxy, vert dim: 1) 
+    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'sneqvoxy  ', noahmp_state%swe_previous)
+
+    ! read snow_soil_interface (file name: zsnsoxy, vert dim: 7) 
+    call read_nc_var3D(ncid, len_land_vec, res, 7,  tile2vector, & 
+                        'zsnsoxy   ', noahmp_state%snow_soil_interface)
+
+    ! read temperature_snow (file name: tsnoxy, vert dim: 3) 
+    call read_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+                        'tsnoxy    ', noahmp_state%temperature_snow)
+
+    ! read snow_ice_layer (file name:  snicexy, vert dim: 3) 
+    call read_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+                        'snicexy    ', noahmp_state%snow_ice_layer)
+
+    ! read snow_liq_layer (file name: snliqxy, vert dim: 3) 
+    call read_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+                        'snliqxy   ', noahmp_state%snow_liq_layer)
+
+    ! read temperature_soil (file name: stc, use layer 1 only, vert dim: 1) 
+    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 4, & 
+                        'stc       ', noahmp_state%temperature_soil)
 
 end subroutine read_fv3_restart
+
 !--------------------------------------------------------------
-! write updated fields tofv3_restarts  open on ncid
+!  read in snow depth increment from jedi increment file
+!  file format is same as restart file
 !--------------------------------------------------------------
- subroutine write_fv3_restart(ncid, noahmp_state, res) 
+ subroutine read_fv3_increment(myrank, date_str, hour_str, res, & 
+                len_land_vec,tile2vector, increment)
 
  implicit none 
 
- integer, intent(in) :: ncid, res
+ include 'mpif.h'
+
+ integer, intent(in) :: myrank, res, len_land_vec
+ character(len=8), intent(in) :: date_str 
+ character(len=2), intent(in) :: hour_str 
+ integer, intent(in) :: tile2vector(len_land_vec,2)
+ double precision, intent(out) :: increment(len_land_vec)     ! snow depth increment
+
+ character(len=100) :: incr_file
+ character(len=1) :: rankch
+ logical :: file_exists
+ integer :: ierr 
+ integer :: id_dim, id_var, fres, ncid
+ integer :: nn
+
+    ! OPEN FILE
+    write(rankch, '(i1.1)') (myrank+1)
+    incr_file = date_str//"."//hour_str//"0000.xainc.sfc_data.tile"//rankch//".nc"
+
+    inquire(file=trim(incr_file), exist=file_exists)
+
+    if (.not. file_exists) then
+            print *, 'incr_file does not exist, ', &
+                    trim(incr_file) , ' exiting'
+            call mpi_abort(mpi_comm_world, 10) 
+    endif
+
+    write (6, *) 'opening ', trim(incr_file)
+
+    ierr=nf90_open(trim(incr_file),nf90_write,ncid)
+    call netcdf_err(ierr, 'opening file: '//trim(incr_file) )
+
+    ! CHECK DIMENSIONS
+    ierr=nf90_inq_dimid(ncid, 'xaxis_1', id_dim)
+    call netcdf_err(ierr, 'reading xaxis_1' )
+    ierr=nf90_inquire_dimension(ncid,id_dim,len=fres)
+    call netcdf_err(ierr, 'reading xaxis_1' )
+
+    if ( fres /= res) then
+       print*,'fatal error: dimensions wrong.'
+       call mpi_abort(mpi_comm_world, ierr)
+    endif
+
+    ! read snow_depth (file name: snwdph, vert dim 1)
+    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'snwdph    ', increment)
+
+    ! close file 
+    write (6, *) 'closing ', trim(incr_file)
+
+    ierr=nf90_close(ncid)
+    call netcdf_err(ierr, 'closing file: '//trim(incr_file) )
+
+end subroutine  read_fv3_increment
+
+!--------------------------------------------------------
+! Subroutine to read in a 2D variable from netcdf file, 
+! and save to noahmp vector
+!--------------------------------------------------------
+
+subroutine read_nc_var2D(ncid, len_land_vec, res, tile2vector, in3D_vdim,  & 
+                         var_name, data_vec)
+
+    integer, intent(in)             :: ncid, len_land_vec, res 
+    character(len=10), intent(in)   :: var_name
+    integer, intent(in)             :: tile2vector(len_land_vec,2)
+    integer, intent(in)             :: in3D_vdim ! 0 - input is 2D, 
+                                                 ! >0, gives dim of 3rd dimension
+    double precision, intent(out)   :: data_vec(len_land_vec) 
+
+    double precision :: dummy2D(res, res) 
+    double precision :: dummy3D(res, res, in3D_vdim)  
+    integer          :: nn, ierr, id_var
+
+    ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
+    call netcdf_err(ierr, 'reading '//var_name//' id' )
+    if (in3D_vdim==0) then
+        ierr=nf90_get_var(ncid, id_var, dummy2D)
+        call netcdf_err(ierr, 'reading '//var_name//' data' )
+    else  ! special case for reading in 3D variable, and retaining only 
+          ! level 1
+        ierr=nf90_get_var(ncid, id_var, dummy3D)
+        call netcdf_err(ierr, 'reading '//var_name//' data' )
+        dummy2D=dummy3D(:,:,1) 
+    endif
+
+    do nn=1,len_land_vec 
+        data_vec(nn) = dummy2D(tile2vector(nn,1), tile2vector(nn,2))
+    enddo
+
+end subroutine read_nc_var2D
+
+!--------------------------------------------------------
+! Subroutine to read in a 3D variable from netcdf file, 
+! and save to noahmp vector
+!--------------------------------------------------------
+
+subroutine read_nc_var3D(ncid, len_land_vec, res, vdim,  & 
+                tile2vector, var_name, data_vec)
+
+    integer, intent(in)             :: ncid, len_land_vec, res, vdim
+    character(len=10), intent(in)   :: var_name
+    integer, intent(in)             :: tile2vector(len_land_vec,2)
+    double precision, intent(out)   :: data_vec(len_land_vec, vdim)
+
+    double precision :: dummy3D(res, res, vdim) 
+    integer          :: nn, ierr, id_var
+
+    ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
+    call netcdf_err(ierr, 'reading '//var_name//' id' )
+    ierr=nf90_get_var(ncid, id_var, dummy3D)
+    call netcdf_err(ierr, 'reading '//var_name//' data' )
+
+    do nn=1,len_land_vec 
+        data_vec(nn,:) = dummy3D(tile2vector(nn,1), tile2vector(nn,2), :) 
+    enddo
+
+end subroutine read_nc_var3D
+
+!--------------------------------------------------------------
+! write updated fields tofv3_restarts  open on ncid
+!--------------------------------------------------------------
+ subroutine write_fv3_restart(noahmp_state, res, ncid, len_land_vec, &
+                 tile2vector) 
+
+ implicit none 
+
+ integer, intent(in) :: ncid, res, len_land_vec
  type(noahmp_type), intent(in) :: noahmp_state
+ integer, intent(in) :: tile2vector(len_land_vec,2)
 
- !double precision :: dummy2D(res, res) 
+ 
+   ! read swe (file name: sheleg, vert dim 1) 
+    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'sheleg    ', noahmp_state%swe)
 
- integer :: ierr, id_var 
+    ! read snow_depth (file name: snwdph, vert dim 1)
+    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'snwdph    ', noahmp_state%snow_depth)
 
-     ierr=nf90_inq_varid(ncid, "slmsk", id_var)
-     call netcdf_err(ierr, 'reading slmsk id' )
-     
-     !dummy2d = reshape(noahmp_state%slmsk, (/res,res/))
-     !ierr = nf90_put_var( ncid, id_var, slmsk)
-     !call netcdf_err(ierr, 'writing slmsk' )
+    ! read active_snow_layers (file name: snowxy, vert dim: 1) 
+    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'snowxy    ', noahmp_state%active_snow_layers)
+
+    ! read swe_previous (file name: sneqvoxy, vert dim: 1) 
+    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+                        'sneqvoxy  ', noahmp_state%swe_previous)
+
+    ! read snow_soil_interface (file name: zsnsoxy, vert dim: 7) 
+    call write_nc_var3D(ncid, len_land_vec, res, 7,  tile2vector, & 
+                        'zsnsoxy   ', noahmp_state%snow_soil_interface)
+
+    ! read temperature_snow (file name: tsnoxy, vert dim: 3) 
+    call write_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+                        'tsnoxy    ', noahmp_state%temperature_snow)
+
+    ! read snow_ice_layer (file name:  snicexy, vert dim: 3) 
+    call write_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+                        'snicexy    ', noahmp_state%snow_ice_layer)
+
+    ! read snow_liq_layer (file name: snliqxy, vert dim: 3) 
+    call write_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+                        'snliqxy   ', noahmp_state%snow_liq_layer)
+
+    ! read temperature_soil (file name: stc, use layer 1 only, vert dim: 1) 
+    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 4, & 
+                        'stc       ', noahmp_state%temperature_soil)
+
 
  end subroutine write_fv3_restart
 
-!--------------------------------------------------------------
-! add increment to all snow layers, maintaining previous distribution
-! between layers, and maintaining previous density. 
-!--------------------------------------------------------------
 
+!--------------------------------------------------------
+! Subroutine to write a 2D variable to the netcdf file 
+!--------------------------------------------------------
 
+subroutine write_nc_var2D(ncid, len_land_vec, res, tile2vector,   & 
+                in3D_vdim, var_name, data_vec)
 
+    integer, intent(in)             :: ncid, len_land_vec, res
+    character(len=10), intent(in)   :: var_name
+    integer, intent(in)             :: tile2vector(len_land_vec,2)
+    integer, intent(in)             :: in3D_vdim ! 0 - input is 2D, 
+                                                 ! >0, gives dim of 3rd dimension
+    double precision, intent(in)    :: data_vec(len_land_vec)
+
+    double precision :: dummy2D(res, res) 
+    double precision :: dummy3D(res, res, in3D_vdim)
+    integer          :: nn, ierr, id_var
+
+    ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
+    call netcdf_err(ierr, 'reading '//trim(var_name)//' id' )
+    if (in3D_vdim==0) then 
+        ierr=nf90_get_var(ncid, id_var, dummy2D)
+        call netcdf_err(ierr, 'reading '//trim(var_name)//' data' )
+    else  ! special case for reading in multi-level variable, and 
+          ! retaining only first level.
+        ierr=nf90_get_var(ncid, id_var, dummy3D)
+        call netcdf_err(ierr, 'reading '//trim(var_name)//' data' )
+        dummy2D = dummy3D(:,:,1)
+    endif
+    
+    ! sub in updated locations (retain previous fields for non-land)  
+    do nn=1,len_land_vec 
+        dummy2D(tile2vector(nn,1), tile2vector(nn,2)) = data_vec(nn) 
+    enddo
+
+    ! overwrite
+    if (in3D_vdim==0) then 
+        ierr = nf90_put_var( ncid, id_var, dummy2D)
+        call netcdf_err(ierr, 'writing '//trim(var_name) )
+    else 
+        dummy3D(:,:,1) = dummy2D 
+        ierr = nf90_put_var( ncid, id_var, dummy3D)
+        call netcdf_err(ierr, 'writing '//trim(var_name) )
+    endif
+ 
+end subroutine write_nc_var2D
+
+!--------------------------------------------------------
+! Subroutine to write a 3D variable to the netcdf file 
+!--------------------------------------------------------
+
+subroutine write_nc_var3D(ncid, len_land_vec, res, vdim, & 
+                tile2vector, var_name, data_vec)
+
+    integer, intent(in)             :: ncid, len_land_vec, res, vdim
+    character(len=10), intent(in)   :: var_name
+    integer, intent(in)             :: tile2vector(len_land_vec,2)
+    double precision, intent(in)    :: data_vec(len_land_vec, vdim)
+
+    double precision :: dummy3D(res, res, vdim)
+    integer          :: nn, ierr, id_var
+
+    ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
+    call netcdf_err(ierr, 'reading '//trim(var_name)//' id' )
+    ierr=nf90_get_var(ncid, id_var, dummy3D)
+    call netcdf_err(ierr, 'reading '//trim(var_name)//' data' )
+    
+    ! sub in updated locations (retain previous fields for non-land)  
+    do nn=1,len_land_vec 
+        dummy3D(tile2vector(nn,1), tile2vector(nn,2),:) = data_vec(nn,:)
+    enddo
+
+    ! overwrite
+    ierr = nf90_put_var( ncid, id_var, dummy3D)
+    call netcdf_err(ierr, 'writing '//trim(var_name) )
+ 
+end subroutine write_nc_var3D
 
  end program apply_incr_noahmp_snow
