@@ -2,7 +2,7 @@
 set -eux
 
 # check if part of workflow. If so, use those modules.
-if [ -f ../workflow_mods_basj ]; then 
+if [ -f ../workflow_mods_bash ]; then 
   echo 'using workflow modules'
   source ../workflow_mods_bash
 else
