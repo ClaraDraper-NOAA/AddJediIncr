@@ -183,7 +183,6 @@ contains
 
           pathway = 6
     
-          if(snow_depth(iloc) <= 0.0)
           layer_density = swe(iloc) / snow_depth(iloc) * 1000.d0
           snow_depth(iloc) = snow_depth(iloc) + increment(iloc)
           swe(iloc) = swe(iloc) + increment(iloc) * layer_density / 1000.d0
@@ -217,7 +216,7 @@ contains
 !      stop
     end if
 
-    if( (abs(anal_snow_depth - snow_depth(iloc))   > 0.0000001) .and. (anal_snow_depth > 0.) ) then
+    if( (abs(anal_snow_depth - snow_depth(iloc))   > 0.0000001) .and. (anal_snow_depth > 0.0001) ) then
       print*, "snow increment and updated model snow inconsistent"
       print*, pathway
       print*, anal_snow_depth, snow_depth(iloc)
