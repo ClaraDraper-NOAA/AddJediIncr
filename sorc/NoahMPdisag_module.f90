@@ -183,7 +183,7 @@ contains
 
           pathway = 6
     
-          if(snow_depth(iloc) <= 0.0) stop "inconsistency in snow_depth and increment"
+          if(snow_depth(iloc) <= 0.0)
           layer_density = swe(iloc) / snow_depth(iloc) * 1000.d0
           snow_depth(iloc) = snow_depth(iloc) + increment(iloc)
           swe(iloc) = swe(iloc) + increment(iloc) * layer_density / 1000.d0
